@@ -1,0 +1,470 @@
+#vector addition
+
+#include <iostream>
+
+__global__ void vectorAdd(int *a, int *b, int *c, int n) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < n) {
+        c[index] = a[index] + b[index];
+    }
+}
+
+int main() {
+    int n = 10;
+    int *a, *b, *c;
+    int *dev_a, *dev_b, *dev_c;
+
+    // Allocate host memory
+    a = new int[n];
+    b = new int[n];
+    c = new int[n];
+
+    // Initialize host arrays a and b
+    for (int i = 0; i < n; i++) {
+        a[i] = i;
+        b[i] = 2 * i;
+    }
+
+    // Allocate device memory
+    cudaMalloc((void **)&dev_a, n * sizeof(int));
+    cudaMalloc((void **)&dev_b, n * sizeof(int));
+    cudaMalloc((void **)&dev_c, n * sizeof(int));
+
+    // Copy host arrays to device
+    cudaMemcpy(dev_a, a, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b, n * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Launch kernel
+    vectorAdd<<<1, n>>>(dev_a, dev_b, dev_c, n);
+
+    // Copy result back to host
+    cudaMemcpy(c, dev_c, n * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(dev_a);
+    cudaFree(dev_b);
+    cudaFree(dev_c);
+
+    // Print result
+    for (int i = 0; i < n; i++) {
+        std::cout << a[i] << " + " << b[i] << " = " << c[i] << std::endl;
+    }
+
+    // Free host memory
+    delete[] a;
+    delete[] b;
+    delete[] c;
+
+    return 0;
+}
+
+#matrix multiplication
+
+%%cuda
+#include <iostream>
+
+#define N 3
+
+__global__ void matrixMul(int *a, int *b, int *c) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int sum = 0;
+
+    if (row < N && col < N) {
+        for (int k = 0; k < N; k++) {
+            sum += a[row * N + k] * b[k * N + col];
+        }
+        c[row * N + col] = sum;
+    }
+}
+
+int main() {
+    int a[N][N] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
+    int b[N][N] = {{9, 8, 7}, {6, 5, 4}, {3, 2, 1}};
+    int c[N][N];
+    int *dev_a, *dev_b, *dev_c;
+
+    // Allocate device memory
+    cudaMalloc((void **)&dev_a, N * N * sizeof(int));
+    cudaMalloc((void **)&dev_b, N * N * sizeof(int));
+    cudaMalloc((void **)&dev_c, N * N * sizeof(int));
+
+    // Copy host matrices to device
+    cudaMemcpy(dev_a, a, N * N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b, N * N * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Launch kernel
+    dim3 threadsPerBlock(N, N);
+    dim3 numBlocks(1, 1);
+    matrixMul<<<numBlocks, threadsPerBlock>>>(dev_a, dev_b, dev_c);
+
+    // Copy result back to host
+    cudaMemcpy(c, dev_c, N * N * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(dev_a);
+    cudaFree(dev_b);
+    cudaFree(dev_c);
+
+    // Print result
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            std::cout << c[i][j] << "\t";
+        }
+        std::cout << std::endl;
+    }
+
+    return 0;
+}
+
+#word frequency
+
+#include <iostream>
+#include <string>
+#include <unordered_map>
+#include <cuda_runtime.h>
+
+_global_ void countWordFreq(char* text, int textLength, int* frequencies) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < textLength) {
+        if (text[tid] != ' ') {
+            atomicAdd(&frequencies[text[tid]], 1);
+        }
+    }
+}
+
+int main() {
+    std::string inputText = "hello world hello cuda programming world hello";
+    const int textLength = inputText.length();
+
+    char* dev_text;
+    int* dev_frequencies;
+    cudaMalloc((void**)&dev_text, textLength * sizeof(char));
+    cudaMalloc((void**)&dev_frequencies, 256 * sizeof(int)); // Assuming ASCII characters
+
+    cudaMemcpy(dev_text, inputText.c_str(), textLength * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemset(dev_frequencies, 0, 256 * sizeof(int)); // Initialize frequencies to 0
+
+    int blockSize = 256; // Assuming one thread per character
+    int numBlocks = (textLength + blockSize - 1) / blockSize;
+
+    countWordFreq<<<numBlocks, blockSize>>>(dev_text, textLength, dev_frequencies);
+
+    int frequencies[256]; // Store frequencies on host
+    cudaMemcpy(frequencies, dev_frequencies, 256 * sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaFree(dev_text);
+    cudaFree(dev_frequencies);
+
+    std::unordered_map<char, int> wordFreqMap;
+    for (int i = 0; i < 256; ++i) {
+        if (frequencies[i] != 0) {
+            wordFreqMap[(char)i] = frequencies[i];
+        }
+    }
+
+    // Print word frequencies
+    std::cout << "Word Frequencies:" << std::endl;
+    for (const auto& pair : wordFreqMap) {
+        std::cout << pair.first << ": " << pair.second << std::endl;
+    }
+
+    return 0;
+}
+
+#sum reduction
+
+%%cuda
+
+// This program computes a sum reduction algorithm with warp divergence
+// By: Nick from CoffeeBeforeArch
+
+#include <cstdlib>
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <cassert>
+#include <numeric>
+
+using std::accumulate;
+using std::generate;
+using std::cout;
+using std::vector;
+
+#define SHMEM_SIZE 256
+
+__global__ void sumReduction(int *v, int *v_r) {
+    // Allocate shared memory
+    __shared__ int partial_sum[SHMEM_SIZE];
+
+    // Calculate thread ID
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Load elements into shared memory
+    partial_sum[threadIdx.x] = v[tid];
+    __syncthreads();
+
+    // Iterate of log base 2 the block dimension
+    for (int s = 1; s < blockDim.x; s *= 2) {
+        // Reduce the threads performing work by half previous the previous
+        // iteration each cycle
+        if (threadIdx.x % (2 * s) == 0) {
+            partial_sum[threadIdx.x] += partial_sum[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+
+    // Let the thread 0 for this block write its result to main memory
+    // Result is indexed by this block
+    if (threadIdx.x == 0) {
+        v_r[blockIdx.x] = partial_sum[0];
+    }
+}
+
+int main() {
+    // Vector size
+    int N = 15;
+    size_t bytes = N * sizeof(int);
+
+    // Host data
+    vector<int> h_v(N);
+    vector<int> h_v_r(N);
+
+    // Initialize the input data
+    generate(begin(h_v), end(h_v), []() { return rand() % 10; });
+
+    // Allocate device memory
+    int *d_v, *d_v_r;
+    cudaMalloc(&d_v, bytes);
+    cudaMalloc(&d_v_r, bytes);
+
+    // Copy to device
+    cudaMemcpy(d_v, h_v.data(), bytes, cudaMemcpyHostToDevice);
+
+    // TB Size
+    const int TB_SIZE = 256;
+
+    // Grid Size (No padding)
+    int GRID_SIZE = (N + TB_SIZE - 1) / TB_SIZE; // Round up to cover all elements
+
+    // Call kernels
+    sumReduction<<<GRID_SIZE, TB_SIZE>>>(d_v, d_v_r);
+
+    sumReduction<<<1, TB_SIZE>>>(d_v_r, d_v_r);
+
+    // Copy to host
+    cudaMemcpy(h_v_r.data(), d_v_r, bytes, cudaMemcpyDeviceToHost);
+
+    // Print the array
+    cout << "Array: ";
+    for (int i = 0; i < N; ++i) {
+        cout << h_v[i] << " ";
+    }
+    cout << "\n";
+
+    // Print the sum
+    cout << "Sum: " << h_v_r[0] << "\n";
+
+    cout << "COMPLETED SUCCESSFULLY\n";
+
+    return 0;
+}
+
+#clock timing
+// Declare host clock variables
+    float elapsedTimeHost;
+    clock_t startTimeHost, stopTimeHost;
+
+    // Start host clock
+    startTimeHost = clock();
+
+    // Compute Fibonacci numbers on host
+    for (long unsigned i = 0; i < ARRAY_DIM; ++i) {
+	    hostFibonacciNumbers[i] = std::round(std::pow(goldenRatio, i) / squareRootOfFive);
+    }
+
+    // Stop host clock
+    stopTimeHost = clock();
+    elapsedTimeHost = stopTimeHost - startTimeHost;
+    std::cout << "Elapsed Time on Host: " << elapsedTimeHost << " ms\n";
+
+#fibonacci sequence
+
+#include <iostream>
+#include <cuda_runtime.h>
+
+__global__ void fibonacci(int* result, int n) {
+    if (n <= 2) {
+        result[n - 1] = 1;
+        return;
+    }
+
+    int idx = threadIdx.x;
+    int* temp = new int[n];
+    temp[0] = 1;
+    temp[1] = 1;
+
+    for (int i = 2; i < n; ++i) {
+        temp[i] = temp[i - 1] + temp[i - 2];
+    }
+
+    result[idx] = temp[idx];
+
+    delete[] temp;
+}
+
+int main() {
+    const int n = 10;
+    const int size = n * sizeof(int);
+    int* result;
+    cudaMallocManaged(&result, size);
+
+    fibonacci<<<1, n>>>(result, n);
+    cudaDeviceSynchronize();
+
+    std::cout << "Fibonacci Sequence:" << std::endl;
+    for (int i = 0; i < n; ++i) {
+        std::cout << result[i] << " ";
+    }
+    std::cout << std::endl;
+
+    cudaFree(result);
+
+    return 0;
+}
+
+#array reduction
+
+#include <device_launch_parameters.h>
+#include <cuda_runtime.h>
+
+template <typename T>
+_global_ void ArrayReductionKernel(T *inputArray, T *outputArray, unsigned arraySize) {
+	extern _shared_ T intermediateSums[];
+    unsigned threadIndex = threadIdx.x;
+	unsigned globalIndex = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
+	intermediateSums[threadIndex] = 0;
+	if (globalIndex < arraySize) {
+		intermediateSums[threadIndex] = inputArray[globalIndex] + inputArray[globalIndex + blockDim.x];
+	}
+	__syncthreads();
+	for (unsigned s = blockDim.x / 2; s > 32; s >>= 1) {
+		if (threadIndex < s) {
+			intermediateSums[threadIndex] += intermediateSums[threadIndex + s];
+		}
+		__syncthreads();
+	}
+	// Assuming blockDim.x > 64
+	if (threadIndex < 32) {
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 32];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 16];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 8];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 4];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 2];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 1];
+	}
+	if (threadIndex == 0) {
+		outputArray[blockIdx.x] = intermediateSums[0];
+    }
+}
+
+#include <iostream>
+
+// Define block size
+#define BLOCK_SIZE 256
+
+// Main function
+int main() {
+    // Define input array size
+    unsigned arraySize = 1000;
+    // Initialize input array and output array
+    int* inputArray = new int[arraySize];
+    int* outputArray = new int[arraySize / BLOCK_SIZE];
+    // Initialize input array with values (for example)
+    for (unsigned i = 0; i < arraySize; ++i) {
+        inputArray[i] = i;
+    }
+    // Allocate device memory for input array and output array
+    int* dev_inputArray;
+    int* dev_outputArray;
+    cudaMalloc((void**)&dev_inputArray, arraySize * sizeof(int));
+    cudaMalloc((void**)&dev_outputArray, (arraySize / BLOCK_SIZE) * sizeof(int));
+    // Copy input array from host to device
+    cudaMemcpy(dev_inputArray, inputArray, arraySize * sizeof(int), cudaMemcpyHostToDevice);
+    // Launch kernel
+    unsigned numBlocks = (arraySize + (BLOCK_SIZE * 2 - 1)) / (BLOCK_SIZE * 2);
+    ArrayReductionKernel<int><<<numBlocks, BLOCK_SIZE>>>(dev_inputArray, dev_outputArray, arraySize);
+    // Copy output array from device to host
+    cudaMemcpy(outputArray, dev_outputArray, (arraySize / BLOCK_SIZE) * sizeof(int), cudaMemcpyDeviceToHost);
+    // Print output array
+    std::cout << "Reduced Array:" << std::endl;
+    for (unsigned i = 0; i < (arraySize / BLOCK_SIZE); ++i) {
+        std::cout << outputArray[i] << " ";
+    }
+    std::cout << std::endl;
+    // Free device memory
+    cudaFree(dev_inputArray);
+    cudaFree(dev_outputArray);
+    // Free host memory
+    delete[] inputArray;
+    delete[] outputArray;
+    return 0;
+}
+
+#array reversal
+
+#include <device_launch_parameters.h>
+#include <cuda_runtime.h>
+
+template <typename T>
+_global_ void ArrayReversalKernel(T *array, unsigned arraySize) {
+    unsigned bufferIdx = threadIdx.x;
+    unsigned offset = blockDim.x * gridDim.x;
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    extern _shared_ T buffer[];
+    for (unsigned i = idx; i < arraySize; i += offset) {
+        array[i] = i + 1;
+    }
+    buffer[bufferIdx] = array[bufferIdx];
+    __syncthreads();
+    array[bufferIdx] = buffer[arraySize - bufferIdx - 1];
+}
+
+#include <iostream>
+
+// Define block size
+#define BLOCK_SIZE 256
+
+// Main function
+int main() {
+    // Define array size
+    unsigned arraySize = 1000;
+    // Initialize input array
+    int* array = new int[arraySize];
+    // Allocate device memory for input array
+    int* dev_array;
+    cudaMalloc((void**)&dev_array, arraySize * sizeof(int));
+    // Initialize input array with values (for example)
+    for (unsigned i = 0; i < arraySize; ++i) {
+        array[i] = i + 1;
+    }
+    // Copy input array from host to device
+    cudaMemcpy(dev_array, array, arraySize * sizeof(int), cudaMemcpyHostToDevice);
+    // Launch kernel
+    unsigned numBlocks = (arraySize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    ArrayReversalKernel<int><<<numBlocks, BLOCK_SIZE, BLOCK_SIZE * sizeof(int)>>>(dev_array, arraySize);
+    // Copy reversed array from device to host
+    cudaMemcpy(array, dev_array, arraySize * sizeof(int), cudaMemcpyDeviceToHost);
+    // Print reversed array
+    std::cout << "Reversed Array:" << std::endl;
+    for (unsigned i = 0; i < arraySize; ++i) {
+        std::cout << array[i] << " ";
+    }
+    std::cout << std::endl;
+    // Free device memory
+    cudaFree(dev_array);
+    // Free host memory
+    delete[] array;
+    return 0;
+}
+
