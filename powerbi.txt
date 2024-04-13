@@ -1,0 +1,902 @@
+#vector addition
+
+#include <iostream>
+
+__global__ void vectorAdd(int *a, int *b, int *c, int n) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < n) {
+        c[index] = a[index] + b[index];
+    }
+}
+
+int main() {
+    int n = 10;
+    int *a, *b, *c;
+    int *dev_a, *dev_b, *dev_c;
+
+    // Allocate host memory
+    a = new int[n];
+    b = new int[n];
+    c = new int[n];
+
+    // Initialize host arrays a and b
+    for (int i = 0; i < n; i++) {
+        a[i] = i;
+        b[i] = 2 * i;
+    }
+
+    // Allocate device memory
+    cudaMalloc((void **)&dev_a, n * sizeof(int));
+    cudaMalloc((void **)&dev_b, n * sizeof(int));
+    cudaMalloc((void **)&dev_c, n * sizeof(int));
+
+    // Copy host arrays to device
+    cudaMemcpy(dev_a, a, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b, n * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Launch kernel
+    vectorAdd<<<1, n>>>(dev_a, dev_b, dev_c, n);
+
+    // Copy result back to host
+    cudaMemcpy(c, dev_c, n * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(dev_a);
+    cudaFree(dev_b);
+    cudaFree(dev_c);
+
+    // Print result
+    for (int i = 0; i < n; i++) {
+        std::cout << a[i] << " + " << b[i] << " = " << c[i] << std::endl;
+    }
+
+    // Free host memory
+    delete[] a;
+    delete[] b;
+    delete[] c;
+
+    return 0;
+}
+
+#matrix multiplication
+
+%%cuda
+#include <iostream>
+
+#define N 3
+
+__global__ void matrixMul(int *a, int *b, int *c) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int sum = 0;
+
+    if (row < N && col < N) {
+        for (int k = 0; k < N; k++) {
+            sum += a[row * N + k] * b[k * N + col];
+        }
+        c[row * N + col] = sum;
+    }
+}
+
+int main() {
+    int a[N][N] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
+    int b[N][N] = {{9, 8, 7}, {6, 5, 4}, {3, 2, 1}};
+    int c[N][N];
+    int *dev_a, *dev_b, *dev_c;
+
+    // Allocate device memory
+    cudaMalloc((void **)&dev_a, N * N * sizeof(int));
+    cudaMalloc((void **)&dev_b, N * N * sizeof(int));
+    cudaMalloc((void **)&dev_c, N * N * sizeof(int));
+
+    // Copy host matrices to device
+    cudaMemcpy(dev_a, a, N * N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b, N * N * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Launch kernel
+    dim3 threadsPerBlock(N, N);
+    dim3 numBlocks(1, 1);
+    matrixMul<<<numBlocks, threadsPerBlock>>>(dev_a, dev_b, dev_c);
+
+    // Copy result back to host
+    cudaMemcpy(c, dev_c, N * N * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(dev_a);
+    cudaFree(dev_b);
+    cudaFree(dev_c);
+
+    // Print result
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            std::cout << c[i][j] << "\t";
+        }
+        std::cout << std::endl;
+    }
+
+    return 0;
+}
+
+#word frequency
+
+#include <iostream>
+#include <string>
+#include <unordered_map>
+#include <cuda_runtime.h>
+
+_global_ void countWordFreq(char* text, int textLength, int* frequencies) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < textLength) {
+        if (text[tid] != ' ') {
+            atomicAdd(&frequencies[text[tid]], 1);
+        }
+    }
+}
+
+int main() {
+    std::string inputText = "hello world hello cuda programming world hello";
+    const int textLength = inputText.length();
+
+    char* dev_text;
+    int* dev_frequencies;
+    cudaMalloc((void**)&dev_text, textLength * sizeof(char));
+    cudaMalloc((void**)&dev_frequencies, 256 * sizeof(int)); // Assuming ASCII characters
+
+    cudaMemcpy(dev_text, inputText.c_str(), textLength * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemset(dev_frequencies, 0, 256 * sizeof(int)); // Initialize frequencies to 0
+
+    int blockSize = 256; // Assuming one thread per character
+    int numBlocks = (textLength + blockSize - 1) / blockSize;
+
+    countWordFreq<<<numBlocks, blockSize>>>(dev_text, textLength, dev_frequencies);
+
+    int frequencies[256]; // Store frequencies on host
+    cudaMemcpy(frequencies, dev_frequencies, 256 * sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaFree(dev_text);
+    cudaFree(dev_frequencies);
+
+    std::unordered_map<char, int> wordFreqMap;
+    for (int i = 0; i < 256; ++i) {
+        if (frequencies[i] != 0) {
+            wordFreqMap[(char)i] = frequencies[i];
+        }
+    }
+
+    // Print word frequencies
+    std::cout << "Word Frequencies:" << std::endl;
+    for (const auto& pair : wordFreqMap) {
+        std::cout << pair.first << ": " << pair.second << std::endl;
+    }
+
+    return 0;
+}
+
+#sum reduction
+
+%%cuda
+
+// This program computes a sum reduction algorithm with warp divergence
+// By: Nick from CoffeeBeforeArch
+
+#include <cstdlib>
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <cassert>
+#include <numeric>
+
+using std::accumulate;
+using std::generate;
+using std::cout;
+using std::vector;
+
+#define SHMEM_SIZE 256
+
+__global__ void sumReduction(int *v, int *v_r) {
+    // Allocate shared memory
+    __shared__ int partial_sum[SHMEM_SIZE];
+
+    // Calculate thread ID
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Load elements into shared memory
+    partial_sum[threadIdx.x] = v[tid];
+    __syncthreads();
+
+    // Iterate of log base 2 the block dimension
+    for (int s = 1; s < blockDim.x; s *= 2) {
+        // Reduce the threads performing work by half previous the previous
+        // iteration each cycle
+        if (threadIdx.x % (2 * s) == 0) {
+            partial_sum[threadIdx.x] += partial_sum[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+
+    // Let the thread 0 for this block write its result to main memory
+    // Result is indexed by this block
+    if (threadIdx.x == 0) {
+        v_r[blockIdx.x] = partial_sum[0];
+    }
+}
+
+int main() {
+    // Vector size
+    int N = 15;
+    size_t bytes = N * sizeof(int);
+
+    // Host data
+    vector<int> h_v(N);
+    vector<int> h_v_r(N);
+
+    // Initialize the input data
+    generate(begin(h_v), end(h_v), []() { return rand() % 10; });
+
+    // Allocate device memory
+    int *d_v, *d_v_r;
+    cudaMalloc(&d_v, bytes);
+    cudaMalloc(&d_v_r, bytes);
+
+    // Copy to device
+    cudaMemcpy(d_v, h_v.data(), bytes, cudaMemcpyHostToDevice);
+
+    // TB Size
+    const int TB_SIZE = 256;
+
+    // Grid Size (No padding)
+    int GRID_SIZE = (N + TB_SIZE - 1) / TB_SIZE; // Round up to cover all elements
+
+    // Call kernels
+    sumReduction<<<GRID_SIZE, TB_SIZE>>>(d_v, d_v_r);
+
+    sumReduction<<<1, TB_SIZE>>>(d_v_r, d_v_r);
+
+    // Copy to host
+    cudaMemcpy(h_v_r.data(), d_v_r, bytes, cudaMemcpyDeviceToHost);
+
+    // Print the array
+    cout << "Array: ";
+    for (int i = 0; i < N; ++i) {
+        cout << h_v[i] << " ";
+    }
+    cout << "\n";
+
+    // Print the sum
+    cout << "Sum: " << h_v_r[0] << "\n";
+
+    cout << "COMPLETED SUCCESSFULLY\n";
+
+    return 0;
+}
+
+#clock timing
+// Declare host clock variables
+    float elapsedTimeHost;
+    clock_t startTimeHost, stopTimeHost;
+
+    // Start host clock
+    startTimeHost = clock();
+
+    // Compute Fibonacci numbers on host
+    for (long unsigned i = 0; i < ARRAY_DIM; ++i) {
+	    hostFibonacciNumbers[i] = std::round(std::pow(goldenRatio, i) / squareRootOfFive);
+    }
+
+    // Stop host clock
+    stopTimeHost = clock();
+    elapsedTimeHost = stopTimeHost - startTimeHost;
+    std::cout << "Elapsed Time on Host: " << elapsedTimeHost << " ms\n";
+
+#fibonacci sequence
+
+#include <iostream>
+#include <cuda_runtime.h>
+
+__global__ void fibonacci(int* result, int n) {
+    if (n <= 2) {
+        result[n - 1] = 1;
+        return;
+    }
+
+    int idx = threadIdx.x;
+    int* temp = new int[n];
+    temp[0] = 1;
+    temp[1] = 1;
+
+    for (int i = 2; i < n; ++i) {
+        temp[i] = temp[i - 1] + temp[i - 2];
+    }
+
+    result[idx] = temp[idx];
+
+    delete[] temp;
+}
+
+int main() {
+    const int n = 10;
+    const int size = n * sizeof(int);
+    int* result;
+    cudaMallocManaged(&result, size);
+
+    fibonacci<<<1, n>>>(result, n);
+    cudaDeviceSynchronize();
+
+    std::cout << "Fibonacci Sequence:" << std::endl;
+    for (int i = 0; i < n; ++i) {
+        std::cout << result[i] << " ";
+    }
+    std::cout << std::endl;
+
+    cudaFree(result);
+
+    return 0;
+}
+
+#array reduction
+
+#include <device_launch_parameters.h>
+#include <cuda_runtime.h>
+
+template <typename T>
+_global_ void ArrayReductionKernel(T *inputArray, T *outputArray, unsigned arraySize) {
+	extern _shared_ T intermediateSums[];
+    unsigned threadIndex = threadIdx.x;
+	unsigned globalIndex = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
+	intermediateSums[threadIndex] = 0;
+	if (globalIndex < arraySize) {
+		intermediateSums[threadIndex] = inputArray[globalIndex] + inputArray[globalIndex + blockDim.x];
+	}
+	__syncthreads();
+	for (unsigned s = blockDim.x / 2; s > 32; s >>= 1) {
+		if (threadIndex < s) {
+			intermediateSums[threadIndex] += intermediateSums[threadIndex + s];
+		}
+		__syncthreads();
+	}
+	// Assuming blockDim.x > 64
+	if (threadIndex < 32) {
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 32];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 16];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 8];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 4];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 2];
+		intermediateSums[threadIndex] += intermediateSums[threadIndex + 1];
+	}
+	if (threadIndex == 0) {
+		outputArray[blockIdx.x] = intermediateSums[0];
+    }
+}
+
+#include <iostream>
+
+// Define block size
+#define BLOCK_SIZE 256
+
+// Main function
+int main() {
+    // Define input array size
+    unsigned arraySize = 1000;
+    // Initialize input array and output array
+    int* inputArray = new int[arraySize];
+    int* outputArray = new int[arraySize / BLOCK_SIZE];
+    // Initialize input array with values (for example)
+    for (unsigned i = 0; i < arraySize; ++i) {
+        inputArray[i] = i;
+    }
+    // Allocate device memory for input array and output array
+    int* dev_inputArray;
+    int* dev_outputArray;
+    cudaMalloc((void**)&dev_inputArray, arraySize * sizeof(int));
+    cudaMalloc((void**)&dev_outputArray, (arraySize / BLOCK_SIZE) * sizeof(int));
+    // Copy input array from host to device
+    cudaMemcpy(dev_inputArray, inputArray, arraySize * sizeof(int), cudaMemcpyHostToDevice);
+    // Launch kernel
+    unsigned numBlocks = (arraySize + (BLOCK_SIZE * 2 - 1)) / (BLOCK_SIZE * 2);
+    ArrayReductionKernel<int><<<numBlocks, BLOCK_SIZE>>>(dev_inputArray, dev_outputArray, arraySize);
+    // Copy output array from device to host
+    cudaMemcpy(outputArray, dev_outputArray, (arraySize / BLOCK_SIZE) * sizeof(int), cudaMemcpyDeviceToHost);
+    // Print output array
+    std::cout << "Reduced Array:" << std::endl;
+    for (unsigned i = 0; i < (arraySize / BLOCK_SIZE); ++i) {
+        std::cout << outputArray[i] << " ";
+    }
+    std::cout << std::endl;
+    // Free device memory
+    cudaFree(dev_inputArray);
+    cudaFree(dev_outputArray);
+    // Free host memory
+    delete[] inputArray;
+    delete[] outputArray;
+    return 0;
+}
+
+#array reversal
+
+#include <device_launch_parameters.h>
+#include <cuda_runtime.h>
+
+template <typename T>
+_global_ void ArrayReversalKernel(T *array, unsigned arraySize) {
+    unsigned bufferIdx = threadIdx.x;
+    unsigned offset = blockDim.x * gridDim.x;
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    extern _shared_ T buffer[];
+    for (unsigned i = idx; i < arraySize; i += offset) {
+        array[i] = i + 1;
+    }
+    buffer[bufferIdx] = array[bufferIdx];
+    __syncthreads();
+    array[bufferIdx] = buffer[arraySize - bufferIdx - 1];
+}
+
+#include <iostream>
+
+// Define block size
+#define BLOCK_SIZE 256
+
+// Main function
+int main() {
+    // Define array size
+    unsigned arraySize = 1000;
+    // Initialize input array
+    int* array = new int[arraySize];
+    // Allocate device memory for input array
+    int* dev_array;
+    cudaMalloc((void**)&dev_array, arraySize * sizeof(int));
+    // Initialize input array with values (for example)
+    for (unsigned i = 0; i < arraySize; ++i) {
+        array[i] = i + 1;
+    }
+    // Copy input array from host to device
+    cudaMemcpy(dev_array, array, arraySize * sizeof(int), cudaMemcpyHostToDevice);
+    // Launch kernel
+    unsigned numBlocks = (arraySize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    ArrayReversalKernel<int><<<numBlocks, BLOCK_SIZE, BLOCK_SIZE * sizeof(int)>>>(dev_array, arraySize);
+    // Copy reversed array from device to host
+    cudaMemcpy(array, dev_array, arraySize * sizeof(int), cudaMemcpyDeviceToHost);
+    // Print reversed array
+    std::cout << "Reversed Array:" << std::endl;
+    for (unsigned i = 0; i < arraySize; ++i) {
+        std::cout << array[i] << " ";
+    }
+    std::cout << std::endl;
+    // Free device memory
+    cudaFree(dev_array);
+    // Free host memory
+    delete[] array;
+    return 0;
+}
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+SAMSSSSSSSSSS%2
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_WORDS 1000
+#define MAX_WORD_LENGTH 50
+
+__global__ void wordCountKernel(char *str, int *histogram, int numWords) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+
+    while (tid < numWords) {
+        atomicAdd(&histogram[str[tid]], 1);
+        tid += stride;
+    }
+}
+
+int main() {
+    char input[] = "Hello world hello CUDA hello world world";
+    char *dev_input;
+    int *histogram, *dev_histogram;
+
+    // Allocate memory on host
+    int numWords = 0;
+    char *words[MAX_WORDS];
+    char *token = strtok(input, " ");
+    while (token != NULL && numWords < MAX_WORDS) {
+        words[numWords++] = token;
+        token = strtok(NULL, " ");
+    }
+
+    // Allocate memory on device
+    cudaMalloc(&dev_input, strlen(input) + 1);
+    cudaMalloc(&dev_histogram, MAX_WORDS * sizeof(int));
+
+    // Copy input string to device
+    cudaMemcpy(dev_input, input, strlen(input) + 1, cudaMemcpyHostToDevice);
+
+    // Initialize histogram to zeros
+    cudaMemset(dev_histogram, 0, MAX_WORDS * sizeof(int));
+
+    // Launch kernel
+    int blockSize = 256;
+    int numBlocks = (numWords + blockSize - 1) / blockSize;
+    wordCountKernel<<<numBlocks, blockSize>>>(dev_input, dev_histogram, numWords);
+
+    // Copy histogram back to host
+    histogram = (int *)malloc(MAX_WORDS * sizeof(int));
+    cudaMemcpy(histogram, dev_histogram, MAX_WORDS * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Print word counts
+    for (int i = 0; i < numWords; ++i) {
+        printf("%s: %d\n", words[i], histogram[i]);
+    }
+
+    // Cleanup
+    free(histogram);
+    cudaFree(dev_input);
+    cudaFree(dev_histogram);
+
+    return 0;
+}
+
+
+#Q1.PRINTING THREAD IDS
+#include <stdio.h>
+
+_global_ void printThreadID()
+{
+    int tid_x = threadIdx.x; // Thread index in x dimension
+    int tid_y = threadIdx.y; // Thread index in y dimension
+    int tid = tid_x + tid_y * blockDim.x; // Global thread ID
+
+    printf("Thread ID: %d, threadIdx.x: %d, threadIdx.y: %d\n", tid, tid_x, tid_y);
+}
+
+int main()
+{
+    // Define grid and block dimensions
+    dim3 threadsPerBlock(2, 3); // 2 threads in x dimension, 3 threads in y dimension
+    dim3 numBlocks(1, 1); // 1 block in x dimension, 1 block in y dimension
+
+    // Launch kernel
+    printThreadID<<<numBlocks, threadsPerBlock>>>();
+
+    // Wait for the kernel to finish
+    cudaDeviceSynchronize();
+
+    return 0;
+}
+#-------------------------------------------------------------------
+Q2.SUM OF ELEMENTS IN 2D ARRAY
+#include <stdio.h>
+
+#define N 4
+
+_global_ void sum2DArray(int *array, int *result)
+{
+    int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    atomicAdd(result, array[tid]);
+}
+
+int main()
+{
+    int h_array[N][N] = {
+        {1, 2, 3, 4},
+        {5, 6, 7, 8},
+        {9, 10, 11, 12},
+        {13, 14, 15, 16}
+    };
+    int h_result = 0;
+
+    int *d_array, *d_result;
+    cudaMalloc((void **)&d_array, N * N * sizeof(int));
+    cudaMalloc((void **)&d_result, sizeof(int));
+
+    cudaMemcpy(d_array, h_array, N * N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_result, &h_result, sizeof(int), cudaMemcpyHostToDevice);
+
+    dim3 threadsPerBlock(N, N);
+    sum2DArray<<<1, threadsPerBlock>>>(d_array, d_result);
+
+    cudaMemcpy(&h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
+
+    printf("Sum of elements in 2D array: %d\n", h_result);
+
+    cudaFree(d_array);
+    cudaFree(d_result);
+
+    return 0;
+}
+#------------------------------------------------------------------
+Q3.CALCULATE DISTANCE OF ALL THE POINTS IN A GRID TO A SPECIFIC POINT (X,Y) WITH SINGLE BLOCK AND MULTIPLE THREADS
+
+#include <stdio.h>
+#include <cuda.h>
+#define N 8
+
+// Memory Allocated in Device
+_device_ float dgrid[N][N];
+
+// Kernel Function
+_global_ void findDistance(int x, int y)
+{
+    int i = threadIdx.x;
+    int j = threadIdx.y;
+    float n = ((i - x) * (i - x)) + ((j - y) * (j - y));
+    dgrid[i][j] = sqrt(n);
+}
+
+// Main Function
+void main()
+{
+    int i, j;
+
+    // Memory Allocated in Host
+    float hgrid[N][N];
+
+    // 1D Grid
+    // 2D Block
+    dim3 dBlock(N, N);
+
+    // ----
+    printf("Enter the x coordinate of node : ");
+    scanf_s("%d", &i);
+
+    printf("Enter the y coordinate of node : ");
+    scanf_s("%d", &j);
+
+    // Calling the kernel function with 1 - Grid, 1 - 2D_Block, 16x16 - Threads
+    findDistance<<<1, dBlock>>>(i, j);
+    // ----
+
+    // Copy the matrix from device to host to print to console
+    cudaMemcpyFromSymbol(&hgrid, dgrid, sizeof(dgrid));
+
+    printf("Values in hgrid!\n\n");
+    for (i = 0; i < N; i++)
+    {
+        for (j = 0; j < N; j++)
+            printf("\t%.0lf", hgrid[i][j]);
+        printf("\n\n");
+    }
+}
+#-------------------------------------------------------------------
+Q4.CALCULATE DISTANCE OF ALL THE POINTS IN A GRID TO A SPECIFIC POINT (X,Y) WITH MULTIPLE BLOCK AND MULTIPLE THREADS
+
+#include <stdio.h>
+#include <cuda.h>
+#define N 16
+#define D 2
+
+// Memory Allocated in Device
+_device_ float dgrid[N * D][N * D];
+
+// Kernel Function
+_global_ void findDistance(int x, int y)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    float n = ((i - x) * (i - x)) + ((j - y) * (j - y));
+    dgrid[i][j] = sqrt(n);
+}
+
+// Main Function
+void main()
+{
+    int i, j;
+
+    // Memory Allocated in Host
+    float hgrid[N * D][N * D];
+
+    // 2D Grid (4 * 4 Blocks)
+    dim3 dGrid(D, D);
+
+    // 2D Block (16 * 16)
+    dim3 dBlock(N, N);
+
+    printf("Enter the x coordinate of node : ");
+    scanf_s("%d", &i);
+    printf("Enter the y coordinate of node : ");
+    scanf_s("%d", &j);
+
+    // Calling the kernel function with 1 - 2D_Grid, 1 - 2D_Block, 16x16 - Threads
+    findDistance<<<dGrid, dBlock>>>(i, j);
+
+    // Copy the matrix from device to host to print to console
+    cudaMemcpyFromSymbol(&hgrid, dgrid, sizeof(dgrid));
+
+    printf("Values in hgrid!\n\n");
+    for (i = 0; i < N * D; i++)
+    {
+        for (j = 0; j < N * D; j++)
+            printf("\t%.0lf", hgrid[i][j]);
+        printf("\n\n");
+    }
+}
+#----------------------------------------------------------------
+Q5.CHARACTER ARRAY COPYING
+#include <stdio.h>
+
+#define N 10
+
+_global_ void copyCharArrays(char *src, char *dest)
+{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    dest[tid] = src[tid];
+}
+
+int main()
+{
+    char h_src[N] = "HelloCUDA";
+    char h_dest[N];
+
+    char *d_src, *d_dest;
+    cudaMalloc((void **)&d_src, N * sizeof(char));
+    cudaMalloc((void **)&d_dest, N * sizeof(char));
+
+    cudaMemcpy(d_src, h_src, N * sizeof(char), cudaMemcpyHostToDevice);
+
+    int blockSize = 4; // Threads per block
+    int numBlocks = (N + blockSize - 1) / blockSize; // Calculate number of blocks needed
+
+    copyCharArrays<<<numBlocks, blockSize>>>(d_src, d_dest);
+
+    cudaMemcpy(h_dest, d_dest, N * sizeof(char), cudaMemcpyDeviceToHost);
+
+    printf("Copied String: %s\n", h_dest);
+
+    cudaFree(d_src);
+    cudaFree(d_dest);
+
+    return 0;
+}
+#-------------------------------------------------------------------
+#Q6.CHARACTER ARRAY MANIPULATION
+#include <stdio.h>
+
+#define N 10
+
+_global_ void manipulateCharArray(char *array)
+{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (array[tid] >= 'a' && array[tid] <= 'z')
+        array[tid] -= 32; // Convert lowercase letter to uppercase
+}
+
+int main()
+{
+    char h_array[N] = "helloCUDA";
+
+    char *d_array;
+    cudaMalloc((void **)&d_array, N * sizeof(char));
+
+    cudaMemcpy(d_array, h_array, N * sizeof(char), cudaMemcpyHostToDevice);
+
+    int blockSize = 4; // Threads per block
+    int numBlocks = (N + blockSize - 1) / blockSize; // Calculate number of blocks needed
+
+    manipulateCharArray<<<numBlocks, blockSize>>>(d_array);
+
+    cudaMemcpy(h_array, d_array, N * sizeof(char), cudaMemcpyDeviceToHost);
+
+    printf("Manipulated String: %s\n", h_array);
+
+    cudaFree(d_array);
+
+    return 0;
+}
+#--------------------------------------------------------------------
+Q7.WORD COUNTER
+%%cuda
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_LENGTH 100
+#define MAX_WORDS 100
+
+_device_ int myStrCmp(const char *str1, const char *str2)
+{
+    int i = 0;
+    while (str1[i] != '\0' && str2[i] != '\0' && str1[i] == str2[i])
+    {
+        i++;
+    }
+    return (str1[i] - str2[i]);
+}
+
+_device_ void myStrCpy(char *dest, const char *src)
+{
+    int i = 0;
+    while ((dest[i] = src[i]) != '\0')
+    {
+        i++;
+    }
+}
+
+// Kernel function to count word frequency
+_global_ void countWordFrequency(char *sentence, int *wordCounts, int numWords, char *uniqueWords, int *totalWords)
+{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid < numWords && wordCounts[tid] == 0)
+    {
+        int count = 1; // Initialize count for current word
+        for (int i = tid + 1; i < numWords; ++i)
+        {
+            if (myStrCmp(&sentence[tid * MAX_LENGTH], &sentence[i * MAX_LENGTH]) == 0)
+            {
+                count++; // Increment count if the word matches
+                wordCounts[i] = 1; // Mark word as counted
+            }
+        }
+        wordCounts[tid] = count;
+
+        // Store unique words
+        if (wordCounts[tid] == 1)
+        {
+            int index = atomicAdd(totalWords, 1);
+            myStrCpy(&uniqueWords[index * MAX_LENGTH], &sentence[tid * MAX_LENGTH]);
+        }
+    }
+}
+
+int main()
+{
+    char h_sentence[MAX_WORDS][MAX_LENGTH] = {
+        "hello", "world", "hello", "cuda", "world"
+    };
+    int numWords = 5;
+
+    // Copy sentence to device memory
+    char *d_sentence;
+    cudaMalloc((void **)&d_sentence, numWords * MAX_LENGTH * sizeof(char));
+    cudaMemcpy(d_sentence, h_sentence, numWords * MAX_LENGTH * sizeof(char), cudaMemcpyHostToDevice);
+
+    // Allocate memory for word counts on device
+    int *d_wordCounts;
+    cudaMalloc((void **)&d_wordCounts, numWords * sizeof(int));
+
+    // Allocate memory for unique words on device
+    char *d_uniqueWords;
+    cudaMalloc((void **)&d_uniqueWords, MAX_WORDS * MAX_LENGTH * sizeof(char));
+
+    // Total number of words
+    int *d_totalWords;
+    cudaMalloc((void **)&d_totalWords, sizeof(int));
+    cudaMemcpy(d_totalWords, &numWords, sizeof(int), cudaMemcpyHostToDevice);
+
+    // Launch kernel to count word frequency and extract unique words
+    int blockSize = 256;
+    int numBlocks = (numWords + blockSize - 1) / blockSize;
+    countWordFrequency<<<numBlocks, blockSize>>>(d_sentence, d_wordCounts, numWords, d_uniqueWords, d_totalWords);
+
+    // Copy unique words back to host
+    char h_uniqueWords[MAX_WORDS][MAX_LENGTH];
+    int totalWords;
+    cudaMemcpy(&totalWords, d_totalWords, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_uniqueWords, d_uniqueWords, totalWords * MAX_LENGTH * sizeof(char), cudaMemcpyDeviceToHost);
+
+    // Print word counts for unique words
+    printf("\nWord Frequencies:\n");
+    for (int i = 0; i < totalWords; ++i)
+    {
+        int count = 0;
+        for (int j = 0; j < numWords; ++j)
+        {
+            if (strcmp(h_uniqueWords[i], h_sentence[j]) == 0)
+            {
+                count++;
+            }
+        }
+        if (count != 0) {
+            printf("%s : %d\n", h_uniqueWords[i], count);
+        }
+    }
+
+    // Free device memory
+    cudaFree(d_sentence);
+    cudaFree(d_wordCounts);
+    cudaFree(d_uniqueWords);
+    cudaFree(d_totalWords);
+
+    return 0;
+}
+
